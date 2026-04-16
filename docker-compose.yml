@@ -1,0 +1,114 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    expose:
+      - "5432"
+    restart: unless-stopped
+
+  valkey:
+    image: docker.io/valkey/valkey:8.0
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+      - VALKEY_DISABLE_COMMANDS=FLUSHDB,FLUSHALL
+    volumes:
+      - valkey-data:/valkey/valkey/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "localhost", "-p", "6379", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    expose:
+      - "6379"
+    restart: unless-stopped
+
+  shared:
+    build:
+      dockerfile: docker/dev.dockerfile
+      context: .
+      target: shared
+    volumes:
+      - shared-dist:/app/shared/dist
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+
+  # Vite frontend
+  vite:
+    build:
+      dockerfile: docker/dev.dockerfile
+      context: .
+      target: vite
+    expose:
+      - "3000"
+    volumes:
+      - shared-dist:/app/shared/dist
+    environment:
+      - NODE_ENV=production
+      - VITE_BACKEND_URL=${SERVER_URL}
+    depends_on:
+      - shared
+    restart: unless-stopped
+
+  # Main Express server
+  server:
+    build:
+      dockerfile: docker/dev.dockerfile
+      context: .
+      target: server
+    expose:
+      - "8080"
+    volumes:
+      - shared-dist:/app/shared/dist
+    environment:
+      - NODE_ENV=production
+      - REDIS_URL=redis://valkey:6379
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - CLIENT_URL=${CLIENT_URL}
+      - SERVER_URL=${SERVER_URL}
+    depends_on:
+      - shared
+      - valkey
+      - postgres
+    restart: unless-stopped
+
+  # BullMQ Workers
+  workers:
+    build:
+      dockerfile: docker/dev.dockerfile
+      context: .
+      target: workers
+    volumes:
+      - shared-dist:/app/shared/dist
+    environment:
+      - NODE_ENV=production
+      - REDIS_URL=redis://valkey:6379
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+    depends_on:
+      - shared
+      - valkey
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  shared-dist:
+  valkey-data:
+  postgres-data:
